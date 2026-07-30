@@ -39,6 +39,29 @@ CHANNELS = {
     "Technodom": {"color": (247, 148, 30, 255), "logo": os.path.join(BASE, "assets", "technodom.png")},
 }
 
+# model code -> product cutout. Falls back to PRODUCT_PNG (the default washing machine)
+# if a model isn't in here — same graceful-degradation behavior as the web tool.
+PRODUCT_LIBRARY = {
+    "WW80AK6L28BBLT": os.path.join(BASE, "assets", "WW80AK6L28BBLT.png"),
+    "WW65AK4S21CELT": os.path.join(BASE, "assets", "WW65AK4S21CELT.png"),
+    "RB37A5411EL/WT": os.path.join(BASE, "assets", "RB37A5411EL_WT.png"),
+    "RB53DG703EB1WT": os.path.join(BASE, "assets", "RB53DG703EB1WT.png"),
+    "NV75T9979CDWT": os.path.join(BASE, "assets", "NV75T9979CDWT.png"),
+    "AR80F09CABWNER": os.path.join(BASE, "assets", "AR80F09CABWNER.png"),
+}
+
+
+def _normalize_code(code):
+    return (code or "").replace("/", "").replace(" ", "").upper()
+
+
+def product_image_for(model_code):
+    target = _normalize_code(model_code)
+    for lib_code, path in PRODUCT_LIBRARY.items():
+        if _normalize_code(lib_code) == target and os.path.exists(path):
+            return path
+    return PRODUCT_PNG
+
 # ---------- Format specs, straight from "2. Форматы (Specs)" ----------
 FORMATS = {
     "feed_square":   {"label": "Feed Square",   "size": (1080, 1080), "safe": {"top": 64, "bottom": 64, "left": 64, "right": 64}, "logo_pos": "top_left"},
@@ -74,6 +97,28 @@ def load_main_model(path):
         if hero is None:
             hero = rec  # fallback: first data row
     return hero
+
+
+def load_all_models(path):
+    """Every valid data row from '1. Вводные (Input)' — for bulk generation.
+    Mirrors load_main_model()'s header detection, just doesn't stop at one row."""
+    wb = openpyxl.load_workbook(path)
+    ws = wb["1. Вводные (Input)"]
+    header_row = None
+    for row in ws.iter_rows(min_row=1, max_row=ws.max_row):
+        if row[0].value == "Tier":
+            header_row = row[0].row
+            break
+    headers = [c.value for c in ws[header_row]]
+
+    models = []
+    for row in ws.iter_rows(min_row=header_row + 1, max_row=ws.max_row):
+        if not row[0].value:
+            continue
+        rec = dict(zip(headers, [c.value for c in row]))
+        if rec.get("Model Code"):
+            models.append(rec)
+    return models
 
 
 def validate(model):
@@ -167,7 +212,8 @@ def render_layers(model, brief, format_key, channel="ALL"):
 
     # ---- product: scaled, right-aligned (tall formats: centered, above price zone) ----
     product = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    prod_img = Image.open(PRODUCT_PNG).convert("RGBA")
+    product_path = product_image_for(model.get("Model Code"))
+    prod_img = Image.open(product_path).convert("RGBA")
     prod_img = prod_img.crop(prod_img.getbbox())  # trim transparent padding in the source cutout
     if is_tall:
         avail_top = head_zone_bottom_anchor + 20
@@ -190,6 +236,8 @@ def render_layers(model, brief, format_key, channel="ALL"):
         prod_resized = prod_img.resize((target_w, target_h), Image.LANCZOS)
         px = W - target_w - safe["right"] - 10
         py = (H - target_h) // 2 + int(H * 0.04)
+        py = min(py, feat_top_anchor - target_h - 20)
+        py = max(py, head_zone_bottom_anchor + 10)
     product.paste(prod_resized, (px, py), prod_resized)
     layers["product"] = product
 
@@ -316,13 +364,14 @@ def compose_flat(layers):
     return base
 
 
-def export_format(model, brief, format_key, channel="ALL"):
+def export_format(model, brief, format_key, channel="ALL", out_dir=None):
+    out_dir = out_dir or OUT_DIR
     spec = FORMATS[format_key]
     layers, meta = render_layers(model, brief, format_key, channel)
     issues = validate_safe_zone(layers, meta, spec)
 
     suffix = "" if channel == "ALL" else f"_{channel}"
-    layer_dir = os.path.join(OUT_DIR, f"_layers_{format_key}{suffix}")
+    layer_dir = os.path.join(out_dir, f"_layers_{format_key}{suffix}")
     os.makedirs(layer_dir, exist_ok=True)
     order = ["background", "product", "logo"] + [k for k in layers if k.startswith("logo_")] + \
             ["headline", "features", "price", "volume_badge"]
@@ -332,14 +381,37 @@ def export_format(model, brief, format_key, channel="ALL"):
         layers[name].save(p)
         layer_paths.append(p)
 
-    psd_path = os.path.join(OUT_DIR, f"{spec['label'].replace('/', '-')}{suffix}.psd")
+    psd_path = os.path.join(out_dir, f"{spec['label'].replace('/', '-')}{suffix}.psd")
     subprocess.run(["convert"] + layer_paths + [psd_path], check=True)
 
-    flat = compose_flat(layers).convert("RGB")
-    jpg_path = os.path.join(OUT_DIR, f"{spec['label'].replace('/', '-')}{suffix}.jpg")
-    flat.save(jpg_path, quality=92)
+    flat = compose_flat(layers).convert("RGBA")
+    png_path = os.path.join(out_dir, f"{spec['label'].replace('/', '-')}{suffix}.png")
+    flat.save(png_path)
 
-    return {"format": spec["label"], "size": spec["size"], "psd": psd_path, "jpg": jpg_path, "safe_zone_issues": issues}
+    return {"format": spec["label"], "size": spec["size"], "psd": psd_path, "png": png_path, "safe_zone_issues": issues}
+
+
+def export_all(input_path=None, out_dir=None):
+    """Batch mode: every model row x every format = N models x 4 (PSD+PNG each).
+    Organizes output as output/all/<ModelCode>/<Format>.png|.psd — same shape as
+    the web tool's bulk-download ZIP."""
+    input_path = input_path or INPUT_PATH
+    out_dir = out_dir or os.path.join(OUT_DIR, "all")
+    os.makedirs(out_dir, exist_ok=True)
+
+    models = load_all_models(input_path)
+    summary = []
+    for model in models:
+        code = model.get("Model Code")
+        model_dir = os.path.join(out_dir, code.replace("/", "-"))
+        os.makedirs(model_dir, exist_ok=True)
+        brief = generate_brief(model)
+        channel = model.get("Channel") or "ALL"
+        for fmt in FORMATS:
+            r = export_format(model, brief, fmt, channel=channel if channel in CHANNELS else "ALL", out_dir=model_dir)
+            summary.append({"model": code, **r})
+            print(f"{code} — {r['format']}: safe-zone issues: {r['safe_zone_issues'] or 'none'}")
+    return summary
 
 
 def main():
@@ -355,7 +427,7 @@ def main():
     for fmt in FORMATS:
         r = export_format(model, brief, fmt)
         results.append(r)
-        print(f"{r['format']}: {r['size']} — PSD + JPG saved. Safe-zone issues: {r['safe_zone_issues'] or 'none'}")
+        print(f"{r['format']}: {r['size']} — PSD + PNG saved. Safe-zone issues: {r['safe_zone_issues'] or 'none'}")
 
     if issues:
         print("\nVALIDATION ISSUES:", issues)
