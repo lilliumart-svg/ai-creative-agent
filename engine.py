@@ -20,8 +20,8 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 INPUT_PATH = os.path.join(BASE, "samsung-creative-brief-template.xlsx")
-FONT_BOLD = os.path.join(BASE, "fonts", "Outfit-Bold.ttf")
-FONT_REGULAR = os.path.join(BASE, "fonts", "Outfit-Regular.ttf")
+FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+FONT_REGULAR = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 PRODUCT_PNG = os.path.join(BASE, "assets", "product.png")
 LOGO_PNG = os.path.join(BASE, "assets", "logo.png")
 OUT_DIR = os.path.join(BASE, "output")
