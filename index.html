@@ -91,7 +91,7 @@
         <input type="file" id="excelFile" accept=".xlsx,.xls" style="display:none" onchange="loadExcel(event)">
         <div id="bulkInfo" style="margin-top:8px;"></div>
         <div id="bulkButtons" style="display:none;gap:8px;margin-top:8px;">
-          <button class="btn btn-primary" style="margin-top:0;" id="bulkJpgBtn" onclick="downloadBulkZip('png')">📦 Все товары — PNG</button>
+          <button class="btn btn-primary" style="margin-top:0;" id="bulkJpgBtn" onclick="downloadBulkZip('jpg')">📦 Все товары — JPG</button>
           <button class="btn btn-purple" style="margin-top:0;" id="bulkPsdBtn" onclick="downloadBulkZip('psd')">📦 Все товары — PSD</button>
         </div>
 
@@ -132,8 +132,8 @@
       <div class="canvas-shell"><canvas id="cv"></canvas></div>
       <div class="toolbar">
         <label class="toggle"><input type="checkbox" id="showSafeZone" onchange="render()"> показать safe zone</label>
-        <button class="btn-gold btn" style="width:auto;margin:0;padding:9px 20px;" onclick="downloadJPG()">⬇ PNG</button>
-        <button class="btn-primary btn" style="width:auto;margin:0;padding:9px 20px;" onclick="downloadAllZip()">📦 Все PNG (ZIP)</button>
+        <button class="btn-gold btn" style="width:auto;margin:0;padding:9px 20px;" onclick="downloadJPG()">⬇ JPG</button>
+        <button class="btn-primary btn" style="width:auto;margin:0;padding:9px 20px;" onclick="downloadAllZip()">📦 Все JPG (ZIP)</button>
         <button class="btn-purple btn" style="width:auto;margin:0;padding:9px 20px;" id="psdBtn" onclick="downloadPSD()">🗂 PSD (этот формат)</button>
         <button class="btn-purple btn" style="width:auto;margin:0;padding:9px 20px;" id="psdAllBtn" onclick="downloadAllPSDZip()">🗂 Все PSD (ZIP)</button>
         <button class="btn btn" style="width:auto;margin:0;padding:9px 20px;background:#2C3E7A;color:#fff;" id="videoBtn" onclick="downloadVideo()">🎬 Скачать видео</button>
@@ -153,6 +153,11 @@ const FORMATS = {
   stories:       {label:"Stories/Reels", sub:"1080×1920", size:[1080,1920], safe:{top:250,bottom:350,left:72,right:72}},
   display:       {label:"Display",       sub:"1200×628",  size:[1200,628], safe:{top:60,bottom:60,left:60,right:60}},
 };
+// Separate from FORMATS on purpose — the brand guideline lists Video as its own
+// spec (1920×1080, 90px safe zone), not just an animated loop of the 4 static
+// formats above. Kept out of FORMATS so bulk JPG/PSD export (which iterates
+// FORMATS) still produces exactly the 4 required test formats.
+const VIDEO_FORMAT_SPEC = {label:"Video", sub:"1920×1080", size:[1920,1080], safe:{top:90,bottom:90,left:90,right:90}};
 
 const NAVY="#1B2559", RED_C="#C24545", DARK="#1E212A", MUTED_C="#6B7280";
 
@@ -273,8 +278,8 @@ function newLayerCanvas(W, H){
 /* ============ LAYER-BASED RENDERING ============
    Each layer is its own canvas — the visible preview composites them,
    and the exact same array feeds the PSD writer, so PSD == preview. */
-function buildLayers(){
-  const spec = FORMATS[currentFormat];
+function buildLayers(formatSpec){
+  const spec = formatSpec || FORMATS[currentFormat];
   const [W, H] = spec.size;
   const safe = spec.safe;
   const isTall = H > W;
@@ -348,7 +353,8 @@ function buildLayers(){
   const hctx = headL.getContext("2d");
   const headline = document.getElementById("f-headline").value;
   const headlineTop = logoY + logoH + clearSpace + 14;
-  const headlineMaxW = W - safe.left - safe.right;
+  let headlineMaxW = W - safe.left - safe.right;
+  if (!isTall) headlineMaxW = Math.min(headlineMaxW, W - safe.left - W*0.46 - safe.right - 30);
   const headSize = fitFont(hctx, headline, 700, headlineMaxW, W*0.036, 20);
   hctx.font = `700 ${headSize}px Outfit`; hctx.fillStyle = NAVY; hctx.textBaseline = "top";
   hctx.fillText(headline, safe.left, headlineTop);
@@ -587,7 +593,7 @@ function buildLayersFor(modelData){
 
 async function downloadBulkZip(kind){
   if (!bulkModels || !bulkModels.length) return;
-  const btn = document.getElementById(kind === "png" ? "bulkJpgBtn" : "bulkPsdBtn");
+  const btn = document.getElementById(kind === "jpg" ? "bulkJpgBtn" : "bulkPsdBtn");
   const origLabel = btn.innerHTML;
   const zip = new JSZip();
   let done = 0;
@@ -601,12 +607,12 @@ async function downloadBulkZip(kind){
       currentFormat = prevFormat;
       const fmtLabel = FORMATS[fmtKey].label.replace("/","-");
 
-      if (kind === "png"){
+      if (kind === "jpg"){
         const flat = newLayerCanvas(meta.W, meta.H);
         const fctx = flat.getContext("2d");
         layers.forEach(l => fctx.drawImage(l.canvas, 0, 0));
-        const blob = await new Promise(res => flat.toBlob(res, "image/png"));
-        folder.file(`${fmtLabel}.png`, blob);
+        const blob = await new Promise(res => flat.toBlob(res, "image/jpeg", 0.92));
+        folder.file(`${fmtLabel}.jpg`, blob);
       } else {
         const psd = { width: meta.W, height: meta.H, children: layers.map(l => ({name:l.name, canvas:l.canvas})) };
         const buffer = agPsd.writePsdBuffer(psd);
@@ -629,8 +635,8 @@ function downloadJPG(){
   const cv = document.getElementById("cv");
   const spec = FORMATS[currentFormat];
   const link = document.createElement("a");
-  link.download = `${spec.label.replace("/","-")}_${currentChannel}.png`;
-  link.href = cv.toDataURL("image/png");
+  link.download = `${spec.label.replace("/","-")}_${currentChannel}.jpg`;
+  link.href = cv.toDataURL("image/jpeg", 0.92);
   link.click();
 }
 
@@ -639,7 +645,7 @@ async function renderToBlob(formatKey){
   currentFormat = formatKey;
   render();
   const cv = document.getElementById("cv");
-  const blob = await new Promise(res => cv.toBlob(res, "image/png"));
+  const blob = await new Promise(res => cv.toBlob(res, "image/jpeg", 0.92));
   currentFormat = prevFormat;
   render();
   return blob;
@@ -649,7 +655,7 @@ async function downloadAllZip(){
   const zip = new JSZip();
   for (const key of Object.keys(FORMATS)){
     const blob = await renderToBlob(key);
-    zip.file(`${FORMATS[key].label.replace("/","-")}_${currentChannel}.png`, blob);
+    zip.file(`${FORMATS[key].label.replace("/","-")}_${currentChannel}.jpg`, blob);
   }
   const content = await zip.generateAsync({type:"blob"});
   const link = document.createElement("a");
@@ -696,7 +702,7 @@ async function downloadVideo(){
   btn.disabled = true;
   btn.innerHTML = `<span class="spinner"></span>Записываю…`;
   try {
-    const { layers, meta } = buildLayers(); // includes retailer logo layer if a channel is selected, named logo_<channel>
+    const { layers, meta } = buildLayers(VIDEO_FORMAT_SPEC); // dedicated Video format (1920×1080) per the brand guideline — not a loop of the static formats
     const byName = {};
     layers.forEach(l => byName[l.name] = l.canvas);
     const retailerLayer = layers.find(l => l.name.startsWith("logo_") && l.name !== "logo");
@@ -748,9 +754,8 @@ async function downloadVideo(){
     await done;
 
     const blob = new Blob(chunks, {type:"video/webm"});
-    const spec = FORMATS[currentFormat];
     const link = document.createElement("a");
-    link.download = `${spec.label.replace("/","-")}_${currentChannel}.webm`;
+    link.download = `${VIDEO_FORMAT_SPEC.label}_${currentChannel}.webm`;
     link.href = URL.createObjectURL(blob);
     link.click();
   } catch(err) {

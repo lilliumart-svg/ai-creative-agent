@@ -12,7 +12,7 @@ import shutil
 import subprocess
 from PIL import Image
 from engine import (
-    load_main_model, generate_brief, render_layers, FORMATS, BASE, OUT_DIR
+    load_main_model, generate_brief, render_layers, FORMATS, VIDEO_FORMAT, get_format_spec, BASE, OUT_DIR
 )
 
 FPS = 30
@@ -57,7 +57,7 @@ def render_video(format_key, video_dir):
     model = load_main_model(os.path.join(BASE, "samsung-creative-brief-template.xlsx"))
     brief = generate_brief(model)
     layers, meta = render_layers(model, brief, format_key)
-    spec = FORMATS[format_key]
+    spec = get_format_spec(format_key)
     W, H = spec["size"]
 
     frames_dir = os.path.join(video_dir, f"_frames_{format_key}")
@@ -106,10 +106,9 @@ def render_video(format_key, video_dir):
 def main():
     video_dir = os.path.join(OUT_DIR, "video")
     os.makedirs(video_dir, exist_ok=True)
-    for key in FORMATS:
-        path = render_video(key, video_dir)
-        size_kb = os.path.getsize(path) / 1024
-        print(f"{key}: {path} ({size_kb:.0f} KB)")
+    path = render_video("video", video_dir)
+    size_kb = os.path.getsize(path) / 1024
+    print(f"Video (1920×1080): {path} ({size_kb:.0f} KB)")
 
 
 if __name__ == "__main__":

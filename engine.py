@@ -70,6 +70,17 @@ FORMATS = {
     "display":       {"label": "Display",       "size": (1200, 628),  "safe": {"top": 60, "bottom": 60, "left": 60, "right": 60}, "logo_pos": "top_left"},
 }
 
+# Separate from FORMATS on purpose: the brand guideline lists "Video" as its own
+# spec (1920×1080, 90px safe zone) — not just an animated loop of the 4 static
+# formats above. video_engine.py renders this one.
+VIDEO_FORMAT = {"label": "Video", "size": (1920, 1080), "safe": {"top": 90, "bottom": 90, "left": 90, "right": 90}, "logo_pos": "top_left"}
+
+
+def get_format_spec(format_key):
+    if format_key == "video":
+        return VIDEO_FORMAT
+    return FORMATS[format_key]
+
 
 def load_main_model(path):
     """Pull the pink-highlighted hero row from '1. Вводные (Input)' —
@@ -182,7 +193,7 @@ def rounded_rect(draw, box, radius, fill):
 def render_layers(model, brief, format_key, channel="ALL"):
     """Returns an ordered dict: layer_name -> RGBA image (same canvas size).
     Order matters — it's also the PSD stacking order (bottom to top)."""
-    spec = FORMATS[format_key]
+    spec = get_format_spec(format_key)
     W, H = spec["size"]
     safe = spec["safe"]
     layers = {}
@@ -269,6 +280,8 @@ def render_layers(model, brief, format_key, channel="ALL"):
     d = ImageDraw.Draw(headline_layer)
     headline_top = ly + logo_h + int(clear_space) + 14
     headline_max_w = W - safe["left"] - safe["right"]
+    if not is_tall:
+        headline_max_w = min(headline_max_w, W - safe["left"] - int(W * 0.46) - safe["right"] - 30)
     headline_size = int(W * 0.036)
     font_headline = fit_text(d, brief["headline"] or "", FONT_BOLD, headline_max_w, headline_size, 20)
     d.text((safe["left"], headline_top), brief["headline"] or "", font=font_headline, fill=NAVY)
@@ -366,7 +379,7 @@ def compose_flat(layers):
 
 def export_format(model, brief, format_key, channel="ALL", out_dir=None):
     out_dir = out_dir or OUT_DIR
-    spec = FORMATS[format_key]
+    spec = get_format_spec(format_key)
     layers, meta = render_layers(model, brief, format_key, channel)
     issues = validate_safe_zone(layers, meta, spec)
 
@@ -384,11 +397,11 @@ def export_format(model, brief, format_key, channel="ALL", out_dir=None):
     psd_path = os.path.join(out_dir, f"{spec['label'].replace('/', '-')}{suffix}.psd")
     subprocess.run(["convert"] + layer_paths + [psd_path], check=True)
 
-    flat = compose_flat(layers).convert("RGBA")
-    png_path = os.path.join(out_dir, f"{spec['label'].replace('/', '-')}{suffix}.png")
-    flat.save(png_path)
+    flat = compose_flat(layers).convert("RGB")
+    jpg_path = os.path.join(out_dir, f"{spec['label'].replace('/', '-')}{suffix}.jpg")
+    flat.save(jpg_path, quality=92)
 
-    return {"format": spec["label"], "size": spec["size"], "psd": psd_path, "png": png_path, "safe_zone_issues": issues}
+    return {"format": spec["label"], "size": spec["size"], "psd": psd_path, "jpg": jpg_path, "safe_zone_issues": issues}
 
 
 def export_all(input_path=None, out_dir=None):
@@ -427,7 +440,7 @@ def main():
     for fmt in FORMATS:
         r = export_format(model, brief, fmt)
         results.append(r)
-        print(f"{r['format']}: {r['size']} — PSD + PNG saved. Safe-zone issues: {r['safe_zone_issues'] or 'none'}")
+        print(f"{r['format']}: {r['size']} — PSD + JPG saved. Safe-zone issues: {r['safe_zone_issues'] or 'none'}")
 
     if issues:
         print("\nVALIDATION ISSUES:", issues)
