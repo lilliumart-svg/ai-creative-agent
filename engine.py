@@ -32,6 +32,13 @@ RED = (194, 69, 69, 255)
 DARK = (30, 33, 42, 255)
 MUTED = (107, 114, 128, 255)
 
+CHANNELS = {
+    "ALL": {"color": DARK, "logo": None},
+    "Mechta": {"color": (230, 0, 126, 255), "logo": os.path.join(BASE, "assets", "mechta.png")},
+    "Sulpak": {"color": (227, 30, 36, 255), "logo": os.path.join(BASE, "assets", "sulpak.png")},
+    "Technodom": {"color": (247, 148, 30, 255), "logo": os.path.join(BASE, "assets", "technodom.png")},
+}
+
 # ---------- Format specs, straight from "2. Форматы (Specs)" ----------
 FORMATS = {
     "feed_square":   {"label": "Feed Square",   "size": (1080, 1080), "safe": {"top": 64, "bottom": 64, "left": 64, "right": 64}, "logo_pos": "top_left"},
@@ -127,13 +134,14 @@ def rounded_rect(draw, box, radius, fill):
     draw.rounded_rectangle(box, radius=radius, fill=fill)
 
 
-def render_layers(model, brief, format_key):
+def render_layers(model, brief, format_key, channel="ALL"):
     """Returns an ordered dict: layer_name -> RGBA image (same canvas size).
     Order matters — it's also the PSD stacking order (bottom to top)."""
     spec = FORMATS[format_key]
     W, H = spec["size"]
     safe = spec["safe"]
     layers = {}
+    channel_cfg = CHANNELS.get(channel, CHANNELS["ALL"])
 
     # ---- background: soft light gradient, Samsung-style ----
     bg = Image.new("RGBA", (W, H), (255, 255, 255, 255))
@@ -199,6 +207,15 @@ def render_layers(model, brief, format_key):
     layers["logo"] = logo_layer
     clear_space = logo_h * 0.5  # used later for validation
 
+    if channel_cfg["logo"] and os.path.exists(channel_cfg["logo"]):
+        retailer_layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        retailer_img = Image.open(channel_cfg["logo"]).convert("RGBA")
+        r_scale = logo_h / retailer_img.height
+        r_w = int(retailer_img.width * r_scale)
+        retailer_resized = retailer_img.resize((r_w, logo_h), Image.LANCZOS)
+        retailer_layer.paste(retailer_resized, (lx + logo_w + 24, ly), retailer_resized)
+        layers[f"logo_{channel}"] = retailer_layer
+
     # ---- headline ----
     headline_layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     d = ImageDraw.Draw(headline_layer)
@@ -217,7 +234,7 @@ def render_layers(model, brief, format_key):
     price_str = fmt_price(brief["price_promo"]) if brief["price_promo"] else fmt_price(brief["price_rrp"])
     price_size = int(W * 0.075)
     font_price = ImageFont.truetype(FONT_BOLD, price_size)
-    d2.text((safe["left"], price_top), price_str, font=font_price, fill=DARK)
+    d2.text((safe["left"], price_top), price_str, font=font_price, fill=channel_cfg["color"])
     price_bbox = d2.textbbox((safe["left"], price_top), price_str, font=font_price)
 
     cursor_y = price_bbox[3] + 6
@@ -291,32 +308,35 @@ def validate_safe_zone(layers, meta, spec):
 
 
 def compose_flat(layers):
-    order = ["background", "product", "logo", "headline", "features", "price", "volume_badge"]
+    order = ["background", "product", "logo"] + [k for k in layers if k.startswith("logo_")] + \
+            ["headline", "features", "price", "volume_badge"]
     base = layers["background"].convert("RGBA")
     for name in order[1:]:
         base = Image.alpha_composite(base, layers[name])
     return base
 
 
-def export_format(model, brief, format_key):
+def export_format(model, brief, format_key, channel="ALL"):
     spec = FORMATS[format_key]
-    layers, meta = render_layers(model, brief, format_key)
+    layers, meta = render_layers(model, brief, format_key, channel)
     issues = validate_safe_zone(layers, meta, spec)
 
-    layer_dir = os.path.join(OUT_DIR, f"_layers_{format_key}")
+    suffix = "" if channel == "ALL" else f"_{channel}"
+    layer_dir = os.path.join(OUT_DIR, f"_layers_{format_key}{suffix}")
     os.makedirs(layer_dir, exist_ok=True)
-    order = ["background", "product", "logo", "headline", "features", "price", "volume_badge"]
+    order = ["background", "product", "logo"] + [k for k in layers if k.startswith("logo_")] + \
+            ["headline", "features", "price", "volume_badge"]
     layer_paths = []
     for name in order:
         p = os.path.join(layer_dir, f"{name}.png")
         layers[name].save(p)
         layer_paths.append(p)
 
-    psd_path = os.path.join(OUT_DIR, f"{spec['label'].replace('/', '-')}.psd")
+    psd_path = os.path.join(OUT_DIR, f"{spec['label'].replace('/', '-')}{suffix}.psd")
     subprocess.run(["convert"] + layer_paths + [psd_path], check=True)
 
     flat = compose_flat(layers).convert("RGB")
-    jpg_path = os.path.join(OUT_DIR, f"{spec['label'].replace('/', '-')}.jpg")
+    jpg_path = os.path.join(OUT_DIR, f"{spec['label'].replace('/', '-')}{suffix}.jpg")
     flat.save(jpg_path, quality=92)
 
     return {"format": spec["label"], "size": spec["size"], "psd": psd_path, "jpg": jpg_path, "safe_zone_issues": issues}
