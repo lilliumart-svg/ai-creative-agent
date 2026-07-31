@@ -132,13 +132,18 @@
       <div class="canvas-shell"><canvas id="cv"></canvas></div>
       <div class="toolbar">
         <label class="toggle"><input type="checkbox" id="showSafeZone" onchange="render()"> показать safe zone</label>
-        <button class="btn-gold btn" style="width:auto;margin:0;padding:9px 20px;" onclick="downloadJPG()">⬇ JPG</button>
-        <button class="btn-primary btn" style="width:auto;margin:0;padding:9px 20px;" onclick="downloadAllZip()">📦 Все JPG (ZIP)</button>
-        <button class="btn-purple btn" style="width:auto;margin:0;padding:9px 20px;" id="psdBtn" onclick="downloadPSD()">🗂 PSD (этот формат)</button>
-        <button class="btn-purple btn" style="width:auto;margin:0;padding:9px 20px;" id="psdAllBtn" onclick="downloadAllPSDZip()">🗂 Все PSD (ZIP)</button>
-        <button class="btn btn" style="width:auto;margin:0;padding:9px 20px;background:#2C3E7A;color:#fff;" id="videoBtn" onclick="downloadVideo()">🎬 Скачать видео</button>
+        <div id="rasterButtons" style="display:flex; gap:10px; flex-wrap:wrap; justify-content:center;">
+          <button class="btn-gold btn" style="width:auto;margin:0;padding:9px 20px;" onclick="downloadJPG()">⬇ JPG</button>
+          <button class="btn-primary btn" style="width:auto;margin:0;padding:9px 20px;" onclick="downloadAllZip()">📦 Все JPG (ZIP)</button>
+          <button class="btn-purple btn" style="width:auto;margin:0;padding:9px 20px;" id="psdBtn" onclick="downloadPSD()">🗂 PSD (этот формат)</button>
+          <button class="btn-purple btn" style="width:auto;margin:0;padding:9px 20px;" id="psdAllBtn" onclick="downloadAllPSDZip()">🗂 Все PSD (ZIP)</button>
+        </div>
+        <div id="videoButtonWrap" style="display:none; gap:10px;">
+          <button class="btn btn" style="width:auto;margin:0;padding:9px 20px;background:#2C3E7A;color:#fff;" id="videoBtn" onclick="downloadVideo()">🎬 Скачать видео (1920×1080)</button>
+        </div>
       </div>
       <div id="validationBox"></div>
+      <p class="note" id="videoNote" style="display:none;">Формат Video — отдельная спека из гайдлайна (1920×1080, safe zone 90px), а не анимация одного из четырёх статичных форматов.</p>
       <p class="note">PSD собирается прямо здесь, в браузере (библиотека ag-psd) — из тех же слоёв,
         что ты видишь в превью, с текущими правками полей и выбранным партнёром. Открывается в Photoshop,
         каждый элемент — отдельный редактируемый слой.</p>
@@ -221,14 +226,23 @@ function fillForm(d){
   document.getElementById("f-volume").value = d.volume || "";
 }
 
+const SIDEBAR_FORMATS = {...FORMATS, video: VIDEO_FORMAT_SPEC};
+
 function renderFormatButtons(){
   const box = document.getElementById("formatButtons");
-  box.innerHTML = Object.entries(FORMATS).map(([key, f]) => `
-    <button class="format-btn ${key===currentFormat?'active':''}" onclick="selectFormat('${key}')">
-      ${f.label}<span>${f.sub}</span>
+  box.innerHTML = Object.entries(SIDEBAR_FORMATS).map(([key, f]) => `
+    <button class="format-btn ${key===currentFormat?'active':''} ${key==='video'?'format-btn-video':''}" onclick="selectFormat('${key}')">
+      ${key==='video'?'🎬 ':''}${f.label}<span>${f.sub}</span>
     </button>`).join("");
 }
-function selectFormat(key){ currentFormat = key; renderFormatButtons(); render(); }
+function selectFormat(key){
+  currentFormat = key;
+  renderFormatButtons();
+  render();
+  document.getElementById("rasterButtons").style.display = key === "video" ? "none" : "flex";
+  document.getElementById("videoButtonWrap").style.display = key === "video" ? "flex" : "none";
+  document.getElementById("videoNote").style.display = key === "video" ? "block" : "none";
+}
 
 function renderChannelChips(){
   const box = document.getElementById("channelChips");
@@ -279,7 +293,7 @@ function newLayerCanvas(W, H){
    Each layer is its own canvas — the visible preview composites them,
    and the exact same array feeds the PSD writer, so PSD == preview. */
 function buildLayers(formatSpec){
-  const spec = formatSpec || FORMATS[currentFormat];
+  const spec = formatSpec || SIDEBAR_FORMATS[currentFormat];
   const [W, H] = spec.size;
   const safe = spec.safe;
   const isTall = H > W;
