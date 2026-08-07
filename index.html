@@ -765,25 +765,32 @@ async function downloadVideo(){
 
     recorder.start();
 
+    function safeDraw(...args){
+      const img = args[0];
+      if (!img) return;
+      try { vctx.drawImage(...args); } catch(e) { /* skip this frame's layer, don't kill the recording */ }
+    }
+
     function drawFrameAt(t){
       vctx.clearRect(0,0,meta.W,meta.H);
       VIDEO_LAYER_ORDER.forEach(name => {
         const entry = VIDEO_TIMELINE.find(x => x[0] === name);
+        if (!entry) return;
         const a = alphaAt(t, entry[1], entry[2]);
         if (a <= 0) return;
         vctx.globalAlpha = a;
         if (name === "product"){
           const scale = 1.0 + 0.04*t;
           const w = meta.W*scale, h = meta.H*scale;
-          vctx.drawImage(byName.product, (meta.W-w)/2, (meta.H-h)/2, w, h);
+          safeDraw(byName.product, (meta.W-w)/2, (meta.H-h)/2, w, h);
         } else {
-          vctx.drawImage(byName[name], 0, 0);
+          safeDraw(byName[name], 0, 0);
         }
       });
-      if (retailerLayer){
+      if (retailerLayer && retailerLayer.canvas){
         const entry = VIDEO_TIMELINE.find(x => x[0] === "logo");
         vctx.globalAlpha = alphaAt(t, entry[1], entry[2]);
-        vctx.drawImage(retailerLayer.canvas, 0, 0);
+        safeDraw(retailerLayer.canvas, 0, 0);
       }
       vctx.globalAlpha = 1;
     }
