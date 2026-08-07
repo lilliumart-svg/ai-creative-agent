@@ -716,7 +716,11 @@ async function downloadVideo(){
   btn.disabled = true;
   btn.innerHTML = `<span class="spinner"></span>Записываю…`;
   try {
-    const { layers, meta } = buildLayers(VIDEO_FORMAT_SPEC); // dedicated Video format (1920×1080) per the brand guideline — not a loop of the static formats
+    if (typeof MediaRecorder === "undefined") {
+      throw new Error("Браузер не поддерживает запись видео (MediaRecorder). Попробуйте Chrome/Edge/Firefox последней версии.");
+    }
+
+    const { layers, meta } = buildLayers(VIDEO_FORMAT_SPEC);
     const byName = {};
     layers.forEach(l => byName[l.name] = l.canvas);
     const retailerLayer = layers.find(l => l.name.startsWith("logo_") && l.name !== "logo");
@@ -725,23 +729,45 @@ async function downloadVideo(){
     vc.width = meta.W; vc.height = meta.H;
     const vctx = vc.getContext("2d");
 
+    const FPS = 30;
     const DURATION_MS = 3500;
-    const stream = vc.captureStream(30);
+    const TOTAL_FRAMES = Math.round(FPS * DURATION_MS / 1000);
+
+    // captureStream(0) = manual mode: WE decide exactly when a new frame exists,
+    // via track.requestFrame(). This is immune to the browser throttling
+    // requestAnimationFrame/setInterval when the tab is backgrounded — which is
+    // what was causing the spinner to hang for minutes/never finish.
+    const stream = vc.captureStream(0);
+    const track = stream.getVideoTracks()[0];
+    const canRequestFrame = typeof track.requestFrame === "function";
+    if (!canRequestFrame) {
+      // fallback for older browsers without manual frame control
+      stream.getVideoTracks().forEach(t => t.stop());
+    }
+    const liveStream = canRequestFrame ? stream : vc.captureStream(FPS);
+
     const mimeType = ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"].find(t => MediaRecorder.isTypeSupported(t)) || "video/webm";
-    const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 5_000_000 });
+    const recorder = new MediaRecorder(liveStream, { mimeType, videoBitsPerSecond: 5_000_000 });
     const chunks = [];
     recorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
 
-    const done = new Promise(resolve => { recorder.onstop = resolve; });
+    let settled = false;
+    const done = new Promise((resolve) => { recorder.onstop = () => { settled = true; resolve(); }; });
+
+    // hard failsafe: whatever happens, stop waiting after a bounded time so the
+    // button can never spin forever — this is the actual bug fix
+    const failsafe = new Promise((resolve) => {
+      setTimeout(() => {
+        if (!settled && recorder.state !== "inactive") { try { recorder.stop(); } catch(e) {} }
+        resolve();
+      }, DURATION_MS + 6000);
+    });
+
     recorder.start();
 
-    const t0 = performance.now();
-    function drawFrame(){
-      const elapsed = performance.now() - t0;
-      const t = Math.min(1, elapsed / DURATION_MS);
+    function drawFrameAt(t){
       vctx.clearRect(0,0,meta.W,meta.H);
       VIDEO_LAYER_ORDER.forEach(name => {
-        const [,, ] = [];
         const entry = VIDEO_TIMELINE.find(x => x[0] === name);
         const a = alphaAt(t, entry[1], entry[2]);
         if (a <= 0) return;
@@ -754,18 +780,27 @@ async function downloadVideo(){
           vctx.drawImage(byName[name], 0, 0);
         }
       });
-      // retailer logo rides in with the same timing as the Samsung logo
       if (retailerLayer){
         const entry = VIDEO_TIMELINE.find(x => x[0] === "logo");
         vctx.globalAlpha = alphaAt(t, entry[1], entry[2]);
         vctx.drawImage(retailerLayer.canvas, 0, 0);
       }
       vctx.globalAlpha = 1;
-      if (elapsed < DURATION_MS) requestAnimationFrame(drawFrame);
-      else recorder.stop();
     }
-    requestAnimationFrame(drawFrame);
-    await done;
+
+    for (let i = 0; i < TOTAL_FRAMES; i++){
+      const t = i / (TOTAL_FRAMES - 1);
+      drawFrameAt(t);
+      if (canRequestFrame) track.requestFrame();
+      await new Promise(r => setTimeout(r, 1000 / FPS));
+    }
+    if (recorder.state !== "inactive") recorder.stop();
+
+    await Promise.race([done, failsafe]);
+
+    if (chunks.length === 0) {
+      throw new Error("Запись не дала ни одного кадра — попробуйте ещё раз, не сворачивая вкладку во время записи.");
+    }
 
     const blob = new Blob(chunks, {type:"video/webm"});
     const link = document.createElement("a");
@@ -773,7 +808,7 @@ async function downloadVideo(){
     link.href = URL.createObjectURL(blob);
     link.click();
   } catch(err) {
-    alert("Не удалось записать видео: " + err.message + "\n(нужен современный браузер с поддержкой MediaRecorder — Chrome/Edge/Firefox)");
+    alert("Не удалось записать видео: " + err.message + "\n(нужен современный браузер с поддержкой MediaRecorder — Chrome/Edge/Firefox, и держите вкладку открытой на экране во время записи)");
   } finally {
     btn.disabled = false;
     btn.innerHTML = origLabel;
